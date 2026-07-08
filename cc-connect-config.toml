@@ -1,0 +1,78 @@
+# cc-connect configuration for Tourism Platform
+# Uses tmux agent type — spawns our Python CLI wrapper
+# Telegram via Long Polling (no public IP needed!)
+
+[log]
+level = "info"
+
+[display]
+mode = "compact"
+thinking_messages = false
+tool_messages = false
+
+[instant_reply]
+enabled = true
+content = "🤔 Подбираем ответ из базы знаний..."
+
+[[projects]]
+name = "tourism-bot"
+admin_from = "*"
+allow_from = "*"
+
+[projects.agent]
+type = "tmux"
+
+[projects.agent.options]
+session = "tourism-bot"
+auto_create = true
+init_command = "python3 /opt/tourism_platform/tourism_bot_cli.py"
+poll_interval_ms = 500
+
+[[projects.platforms]]
+type = "telegram"
+
+[projects.platforms.options]
+token = "8530023333:AAHHlAvuY4zu7FxSq38ydJc0vQN5UEA1uPo"
+
+# --- Discord (uncomment when ready) ---
+# [[projects]]
+# name = "tourism-discord"
+# admin_from = "*"
+# allow_from = "*"
+#
+# [projects.agent]
+# type = "tmux"
+#
+# [projects.agent.options]
+# session = "tourism-discord"
+# auto_create = true
+# init_command = "python3 /opt/tourism_platform/tourism_bot_cli.py"
+# poll_interval_ms = 500
+#
+# [[projects.platforms]]
+# type = "discord"
+#
+# [projects.platforms.options]
+# token = "YOUR_DISCORD_BOT_TOKEN"
+
+# --- Slack (uncomment when ready) ---
+# [[projects]]
+# name = "tourism-slack"
+# admin_from = "*"
+# allow_from = "*"
+#
+# [projects.agent]
+# type = "tmux"
+#
+# [projects.agent.options]
+# session = "tourism-slack"
+# auto_create = true
+# init_command = "python3 /opt/tourism_platform/tourism_bot_cli.py"
+# poll_interval_ms = 500
+#
+# [[projects.platforms]]
+# type = "slack"
+#
+# [projects.platforms.options]
+# bot_token = "xoxb-YOUR-SLACK-BOT-TOKEN"
+# app_token = "xapp-YOUR-SLACK-APP-TOKEN"
