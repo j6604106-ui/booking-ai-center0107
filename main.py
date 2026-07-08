@@ -44,38 +44,28 @@ async def root():
 <p>Туристический бот с 6 агентами и базой знаний.</p>
 <h3>Агенты:</h3>
 <ul>
-<li>🎯 <b>consultant</b> — выбор направления</li>
-<li>📋 <b>booking</b> — бронирование, отмена</li>
-<li>💰 <b>sales</b> — скидки, допродажи</li>
-<li>🛡️ <b>insurance</b> — страховка</li>
-<li>🚗 <b>transport</b> — трансфер, аренда</li>
-<li>🛂 <b>visa</b> — визы, документы</li>
+<li>🎯 <b>Консультант</b> — выбор направления</li>
+<li>📋 <b>Бронирование</b> — заказ, отмена</li>
+<li>💰 <b>Продажи</b> — скидки</li>
+<li>🛡️ <b>Страхование</b> — страховка</li>
+<li>🚗 <b>Транспорт</b> — трансфер</li>
+<li>🛂 <b>Визы</b> — документы</li>
 </ul>
-<h3>API:</h3>
-<ul>
-<li><code>/health</code> — статус</li>
-<li><code>/chat/{agent}</code> — чат</li>
-<li><code>/webhook/{token}</code> — Telegram</li>
-<li><code>/docs</code> — Swagger UI</li>
-</ul>
+<p><small>Telegram: @BookingAICenter_bot</small></p>
 </body></html>""")
 
 
 @app.get('/health')
 async def health():
-    config = _get_bot_config()
-    checks = {'status': 'ok', 'knowledge_version': '1.0.0'}
-
+    checks = {'status': 'ok', 'version': '1.0.0'}
     try:
+        config = _get_bot_config()
         config.sessions.r.ping()
         checks['redis'] = 'ok'
+        checks['chunks'] = len(config.retriever.chunks)
     except Exception as e:
         checks['redis'] = f'error: {e}'
         checks['status'] = 'degraded'
-
-    checks['chunks'] = len(config.retriever.chunks)
-    checks['model'] = config.llm.model
-
     return JSONResponse(checks)
 
 
@@ -96,6 +86,12 @@ async def telegram_webhook(token: str, request: Request):
 
 @app.post('/chat/{agent}')
 async def chat_endpoint(agent: str, request: Request):
+    # API key protection (if configured)
+    if settings.api_key:
+        provided = request.headers.get('X-API-Key', '')
+        if provided != settings.api_key:
+            raise HTTPException(status_code=401, detail='Invalid API key')
+
     body = await request.json()
     user_id = body.get('user_id')
     text = body.get('text', '')

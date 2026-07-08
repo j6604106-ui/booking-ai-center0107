@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     llm_api_key: str = ''
     llm_model: str = 'openrouter/openrouter/free'
     llm_base_url: str = 'http://0.0.0.0:4000'
+    api_key: str = ''
 
 
 settings = Settings()

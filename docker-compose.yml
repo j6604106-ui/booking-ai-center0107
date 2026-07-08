@@ -16,6 +16,7 @@ services:
       - LLM_API_KEY=${LLM_API_KEY:-c3oqe1veKq4DIY4eFqJVUXNRgVZgMiT9J6+P3+ktGQY=}
       - LLM_MODEL=${LLM_MODEL:-openrouter/openrouter/free}
       - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:4000}
+      - API_KEY=${API_KEY:-}
     depends_on:
       - redis
     volumes:
