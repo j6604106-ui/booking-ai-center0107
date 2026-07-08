@@ -1,5 +1,6 @@
 """Telegram bot handler: processes incoming updates via webhook."""
 
+import re
 import logging
 from dataclasses import dataclass
 
@@ -7,8 +8,13 @@ from knowledge_base import Retriever
 from utils.llm import LLMClient
 from utils.session_manager import SessionManager
 from utils.prompts import get_agent_prompt, assemble_user_message
+from utils.self_learning import SelfLearningEngine
+from utils.cost_tracker import CostTracker, estimate_tokens
 
 logger = logging.getLogger(__name__)
+
+THINKING_TAG_RE = re.compile(r'<think>.*?</think>', re.DOTALL)
+SAFETY_FILTER_RE = re.compile(r'^User Safety:\s*\w+$', re.IGNORECASE)
 
 AGENTS = {
     'consultant': '🎯 Консультант — выбор направления',
@@ -28,6 +34,8 @@ class BotConfig:
     retriever: Retriever
     llm: LLMClient
     sessions: SessionManager
+    learning: SelfLearningEngine
+    cost: CostTracker
     default_agent: str = 'consultant'
 
 
@@ -82,18 +90,25 @@ async def handle_message(config: BotConfig, user_id: int, text: str, agent: str 
     # Regular message
     agent = agent or _get_user_agent(config, user_id)
 
+    # Observe question for self-learning
+    config.learning.observe(agent, user_id, text)
+
     relevant = config.retriever.retrieve(text, top_k=3)
     knowledge_context = config.retriever.format_context(relevant)
 
-    history = config.sessions.get_history(agent, user_id, limit=10)
+    # Compact session if history is long (AgentForge-inspired)
+    await config.sessions.compact_if_needed(agent, user_id)
 
+    # Build messages with summary context
     system_prompt = get_agent_prompt(agent)
-    messages = [{'role': 'system', 'content': system_prompt}]
-    for msg in history:
-        messages.append({'role': msg['role'], 'content': msg['content']})
+    messages = config.sessions.build_messages_with_summary(agent, user_id, system_prompt, limit=10)
 
     user_content = assemble_user_message(text, knowledge_context)
     messages.append({'role': 'user', 'content': user_content})
+
+    # Estimate input tokens
+    input_text = ' '.join(m['content'] for m in messages)
+    input_tokens = estimate_tokens(input_text)
 
     try:
         response = await config.llm.chat(messages, temperature=0.5)
@@ -102,10 +117,30 @@ async def handle_message(config: BotConfig, user_id: int, text: str, agent: str 
         return f'⚠️ Ошибка LLM: {e}'
 
     # Strip reasoning tags from DeepSeek R1 responses
-    import re as _re
-    response = _re.sub(r'<think>.*?</think>', '', response, flags=_re.DOTALL).strip()
+    response = THINKING_TAG_RE.sub('', response).strip()
+
+    # Detect safety-filter stubs and retry with different approach
+    if SAFETY_FILTER_RE.match(response) or len(response) < 20:
+        logger.warning(f"Safety filter stub or too short response: '{response[:50]}', retrying with explicit prompt")
+        # Retry with a clearer prompt that avoids safety triggers
+        retry_messages = messages[:-1]  # remove last user message
+        retry_messages.append({
+            'role': 'user',
+            'content': f"Ответь по-русски, дружелюбно, в формате Наблюдение/Концепция/Резюме/Вопрос.\nВопрос: {text}",
+        })
+        try:
+            response = await config.llm.chat(retry_messages, temperature=0.5)
+            response = THINKING_TAG_RE.sub('', response).strip()
+        except Exception as e2:
+            logger.warning(f"Retry also failed: {e2}")
+
     if not response:
         response = '⚠️ LLM вернул пустой ответ. Попробуйте ещё раз.'
+
+    # Track cost
+    output_tokens = estimate_tokens(response)
+    model = config.llm.providers[0].model if config.llm.providers else 'unknown'
+    config.cost.log_usage(agent, model, user_id, input_tokens, output_tokens)
 
     config.sessions.add_message(agent, user_id, 'user', text)
     config.sessions.add_message(agent, user_id, 'assistant', response)

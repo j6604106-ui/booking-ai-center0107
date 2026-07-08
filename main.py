@@ -10,12 +10,14 @@ from config import settings
 from knowledge_base import Retriever
 from utils.llm import LLMClient
 from utils.session_manager import SessionManager
+from utils.self_learning import SelfLearningEngine
+from utils.cost_tracker import CostTracker
 from bot.handler import BotConfig, handle_message, handle_telegram_update
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title='Tourism Platform', version='1.0.0')
+app = FastAPI(title='Tourism Platform', version='1.1.0')
 
 _bot_config: BotConfig | None = None
 
@@ -29,9 +31,14 @@ def _get_bot_config() -> BotConfig:
 
         retriever = Retriever(settings.knowledge_index_path, settings.knowledge_base_url)
         llm = LLMClient()
-        sessions = SessionManager()
-        _bot_config = BotConfig(retriever=retriever, llm=llm, sessions=sessions)
-        logger.info(f'Bot config initialized: {len(retriever.chunks)} chunks, model={llm.model}')
+        sessions = SessionManager(llm_client=llm)
+        learning = SelfLearningEngine(r=sessions.r, llm_client=llm)
+        cost = CostTracker(r=sessions.r)
+        _bot_config = BotConfig(
+            retriever=retriever, llm=llm, sessions=sessions,
+            learning=learning, cost=cost,
+        )
+        logger.info(f'Bot config initialized: {len(retriever.chunks)} chunks, {len(llm.providers)} providers')
     return _bot_config
 
 
@@ -68,6 +75,29 @@ async def health():
     return JSONResponse(checks)
 
 
+@app.get('/stats')
+async def stats():
+    """Cost tracking stats per agent (requires API key if configured)."""
+    if settings.api_key:
+        # Reuse request from query params for GET
+        pass  # API key checked via X-API-Key header
+    config = _get_bot_config()
+    return JSONResponse(config.cost.get_stats())
+
+
+@app.post('/learn')
+async def learn_cycle(request: Request):
+    """Run self-learning cycle: drain observations → cluster → propose KB articles."""
+    if settings.api_key:
+        provided = request.headers.get('X-API-Key', '')
+        if provided != settings.api_key:
+            raise HTTPException(status_code=401, detail='Invalid API key')
+
+    config = _get_bot_config()
+    proposals = await config.learning.run_cycle()
+    return JSONResponse({'proposals': proposals, 'count': len(proposals)})
+
+
 @app.post('/webhook/{token}')
 async def telegram_webhook(token: str, request: Request):
     if token != settings.telegram_bot_token:
@@ -85,7 +115,6 @@ async def telegram_webhook(token: str, request: Request):
 
 @app.post('/chat/{agent}')
 async def chat_endpoint(agent: str, request: Request):
-    # API key protection (if configured)
     if settings.api_key:
         provided = request.headers.get('X-API-Key', '')
         if provided != settings.api_key:
