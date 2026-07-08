@@ -57,14 +57,13 @@ async def root():
 
 @app.get('/health')
 async def health():
-    checks = {'status': 'ok', 'version': '1.0.0'}
+    checks = {'status': 'ok'}
     try:
         config = _get_bot_config()
         config.sessions.r.ping()
         checks['redis'] = 'ok'
-        checks['chunks'] = len(config.retriever.chunks)
     except Exception as e:
-        checks['redis'] = f'error: {e}'
+        checks['redis'] = 'error'
         checks['status'] = 'degraded'
     return JSONResponse(checks)
 
@@ -104,7 +103,12 @@ async def chat_endpoint(agent: str, request: Request):
 
 
 @app.post('/build-kb')
-async def build_kb():
+async def build_kb(request: Request):
+    if settings.api_key:
+        provided = request.headers.get('X-API-Key', '')
+        if provided != settings.api_key:
+            raise HTTPException(status_code=401, detail='Invalid API key')
+
     from scripts.build_knowledge import build_knowledge
     count = build_knowledge(settings.kb_dir, os.path.dirname(settings.knowledge_index_path))
     global _bot_config

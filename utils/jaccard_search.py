@@ -99,11 +99,23 @@ def retrieve(chunks: list[WikiChunk], query: str, top_k: int = 3) -> list[Retrie
     query_tokens = tokenize(query)
     if not query_tokens:
         return []
+
+    # Also tokenize title+section for title-boost scoring
+    title_tokens_map: dict[str, list[str]] = {}
+    for chunk in chunks:
+        key = chunk.id
+        title_tokens_map[key] = tokenize(f"{chunk.title} {chunk.section}")
+
     scored: list[RetrievedChunk] = []
     for chunk in chunks:
-        score = jaccard(query_tokens, chunk.keywords)
-        if score > 0:
-            scored.append(RetrievedChunk(chunk=chunk, score=score))
+        base_score = jaccard(query_tokens, chunk.keywords)
+        if base_score == 0:
+            continue
+        # Boost if query matches title or section keywords
+        title_score = jaccard(query_tokens, title_tokens_map.get(chunk.id, []))
+        score = base_score + 0.2 * title_score  # 20% title boost
+        scored.append(RetrievedChunk(chunk=chunk, score=score))
+
     scored.sort(key=lambda x: x.score, reverse=True)
     return scored[:top_k]
 

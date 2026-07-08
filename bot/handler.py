@@ -82,7 +82,7 @@ async def handle_message(config: BotConfig, user_id: int, text: str, agent: str 
     # Regular message
     agent = agent or _get_user_agent(config, user_id)
 
-    relevant = config.retriever.retrieve(text, top_k=2)
+    relevant = config.retriever.retrieve(text, top_k=3)
     knowledge_context = config.retriever.format_context(relevant)
 
     history = config.sessions.get_history(agent, user_id, limit=10)
@@ -96,10 +96,16 @@ async def handle_message(config: BotConfig, user_id: int, text: str, agent: str 
     messages.append({'role': 'user', 'content': user_content})
 
     try:
-        response = await config.llm.chat(messages)
+        response = await config.llm.chat(messages, temperature=0.5)
     except Exception as e:
         logger.error(f'LLM error for user {user_id}: {e}')
         return f'⚠️ Ошибка LLM: {e}'
+
+    # Strip reasoning tags from DeepSeek R1 responses
+    import re as _re
+    response = _re.sub(r'<think>.*?</think>', '', response, flags=_re.DOTALL).strip()
+    if not response:
+        response = '⚠️ LLM вернул пустой ответ. Попробуйте ещё раз.'
 
     config.sessions.add_message(agent, user_id, 'user', text)
     config.sessions.add_message(agent, user_id, 'assistant', response)
