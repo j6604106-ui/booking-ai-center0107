@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   tourism_platform:
     build: .
@@ -31,5 +29,21 @@ services:
     volumes:
       - redis_data:/data
 
+  caddy:
+    image: caddy:2
+    container_name: caddy_tourism
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - tourism_platform
+
 volumes:
   redis_data:
+  caddy_data:
+  caddy_config:

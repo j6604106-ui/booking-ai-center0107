@@ -1,0 +1,3 @@
+tp.ithelp.pro {
+	reverse_proxy tourism_platform:8000
+}
