@@ -1,10 +1,10 @@
 """FastAPI app: Telegram webhook, health check, agent chat endpoints."""
 
 import os
-import asyncio
+import logging
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 
 from config import settings
 from knowledge_base import Retriever
@@ -12,16 +12,17 @@ from utils.llm import LLMClient
 from utils.session_manager import SessionManager
 from bot.handler import BotConfig, handle_message, handle_telegram_update
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title='Tourism Platform', version='1.0.0')
 
-# Lazy init — created once on first request
 _bot_config: BotConfig | None = None
 
 
 def _get_bot_config() -> BotConfig:
     global _bot_config
     if _bot_config is None:
-        # Ensure knowledge index exists; build if missing
         if not os.path.exists(settings.knowledge_index_path):
             from scripts.build_knowledge import build_knowledge
             build_knowledge(settings.kb_dir, os.path.dirname(settings.knowledge_index_path))
@@ -30,15 +31,52 @@ def _get_bot_config() -> BotConfig:
         llm = LLMClient()
         sessions = SessionManager()
         _bot_config = BotConfig(retriever=retriever, llm=llm, sessions=sessions)
+        logger.info(f'Bot config initialized: {len(retriever.chunks)} chunks, model={llm.model}')
     return _bot_config
+
+
+@app.get('/', response_class=HTMLResponse)
+async def root():
+    return HTMLResponse("""<!DOCTYPE html>
+<html><head><title>Booking AI Center</title></head>
+<body style="font-family:sans-serif;max-width:600px;margin:40px auto">
+<h1>🏨 Booking AI Center</h1>
+<p>Туристический бот с 6 агентами и базой знаний.</p>
+<h3>Агенты:</h3>
+<ul>
+<li>🎯 <b>consultant</b> — выбор направления</li>
+<li>📋 <b>booking</b> — бронирование, отмена</li>
+<li>💰 <b>sales</b> — скидки, допродажи</li>
+<li>🛡️ <b>insurance</b> — страховка</li>
+<li>🚗 <b>transport</b> — трансфер, аренда</li>
+<li>🛂 <b>visa</b> — визы, документы</li>
+</ul>
+<h3>API:</h3>
+<ul>
+<li><code>/health</code> — статус</li>
+<li><code>/chat/{agent}</code> — чат</li>
+<li><code>/webhook/{token}</code> — Telegram</li>
+<li><code>/docs</code> — Swagger UI</li>
+</ul>
+</body></html>""")
 
 
 @app.get('/health')
 async def health():
-    return JSONResponse({
-        'status': 'ok',
-        'knowledge_version': '1.0.0',
-    })
+    config = _get_bot_config()
+    checks = {'status': 'ok', 'knowledge_version': '1.0.0'}
+
+    try:
+        config.sessions.r.ping()
+        checks['redis'] = 'ok'
+    except Exception as e:
+        checks['redis'] = f'error: {e}'
+        checks['status'] = 'degraded'
+
+    checks['chunks'] = len(config.retriever.chunks)
+    checks['model'] = config.llm.model
+
+    return JSONResponse(checks)
 
 
 @app.post('/webhook/{token}')
@@ -53,7 +91,6 @@ async def telegram_webhook(token: str, request: Request):
     if result is None:
         return JSONResponse({'status': 'skipped'})
 
-    # Always return 200 to Telegram so it doesn't retry
     return JSONResponse(result)
 
 
@@ -74,7 +111,6 @@ async def chat_endpoint(agent: str, request: Request):
 async def build_kb():
     from scripts.build_knowledge import build_knowledge
     count = build_knowledge(settings.kb_dir, os.path.dirname(settings.knowledge_index_path))
-    # Reset cached config so next request loads fresh chunks
     global _bot_config
     _bot_config = None
     return JSONResponse({'chunks': count, 'status': 'rebuilt'})
