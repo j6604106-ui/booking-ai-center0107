@@ -1,9 +1,9 @@
 """Self-learning engine for KB auto-enrichment (AgentForge-inspired).
 
-Pipeline: Observer → Extractor → Generator
+Pipeline: Observer -> Extractor -> Generator
 - Observer: logs user questions to Redis
-- Extractor: clusters similar questions via Jaccard (threshold 0.7)
-- Generator: proposes new KB articles for clusters ≥ 5 questions
+- Extractor: clusters similar questions via Jaccard (threshold 0.3)
+- Generator: proposes new KB articles for clusters >= 3 questions
 
 This runs periodically (cron trigger or on-demand).
 """
@@ -11,6 +11,7 @@ This runs periodically (cron trigger or on-demand).
 import json
 import logging
 import time
+import re as _re
 
 import redis
 
@@ -21,9 +22,10 @@ logger = logging.getLogger(__name__)
 
 OBSERVER_KEY = "learn:questions"
 CLUSTER_KEY = "learn:clusters"
-MIN_CLUSTER_SIZE = 5
-SIMILARITY_THRESHOLD = 0.7
+MIN_CLUSTER_SIZE = 3
+SIMILARITY_THRESHOLD = 0.3  # Lower threshold for short questions
 MAX_OBSERVED = 1000
+THINKING_RE = _re.compile(r"<think>.*?</think>", _re.DOTALL)
 
 
 class Observer:
@@ -61,7 +63,6 @@ class Extractor:
         for entry in entries:
             placed = False
             for cluster in clusters:
-                # Compare with cluster centroid (first entry)
                 centroid_tokens = cluster[0]['tokens']
                 score = jaccard(entry['tokens'], centroid_tokens)
                 if score >= SIMILARITY_THRESHOLD:
@@ -71,15 +72,13 @@ class Extractor:
             if not placed:
                 clusters.append([entry])
 
-        # Filter: only clusters with ≥ MIN_CLUSTER_SIZE
+        # Filter: only clusters with >= MIN_CLUSTER_SIZE
         result = []
         for cluster in clusters:
             if len(cluster) >= MIN_CLUSTER_SIZE:
-                # Compute cluster keywords (most common tokens)
                 all_tokens = []
                 for e in cluster:
                     all_tokens.extend(e['tokens'])
-                # Top keywords by frequency
                 from collections import Counter
                 freq = Counter(all_tokens)
                 top_keywords = [t for t, c in freq.most_common(10) if c >= 2]
@@ -118,13 +117,11 @@ class Generator:
         proposals = []
 
         for cluster in clusters:
-            # Check if similar KB article already exists
             if self._is_covered(cluster):
                 logger.info(f"Cluster covered by existing KB: {cluster['keywords']}")
                 continue
 
             if not self.llm:
-                # Store cluster for manual review
                 self._store_cluster(cluster)
                 proposals.append({
                     'status': 'pending_review',
@@ -134,9 +131,9 @@ class Generator:
                 })
                 continue
 
-            # Generate KB article via LLM
             article = await self._generate_article(cluster)
             if article:
+                self._save_article(cluster, article)
                 proposals.append({
                     'status': 'generated',
                     'keywords': cluster['keywords'],
@@ -148,7 +145,6 @@ class Generator:
 
     def _is_covered(self, cluster: dict) -> bool:
         """Check if existing KB already covers this cluster."""
-        # Load existing KB index keywords
         from knowledge_base import Retriever
         try:
             retriever = Retriever(settings.knowledge_index_path, '')
@@ -188,16 +184,30 @@ class Generator:
                 temperature=0.3,
                 max_tokens=512,
             )
-            import re
-            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+            content = THINKING_RE.sub('', content).strip()
             return content
         except Exception as e:
             logger.warning(f"KB article generation failed: {e}")
             return None
 
+    def _save_article(self, cluster: dict, content: str):
+        """Save generated article to Redis for admin review."""
+        key = f"{CLUSTER_KEY}:article:{int(time.time())}"
+        article_data = {
+            'keywords': cluster['keywords'],
+            'agents': cluster['agents'],
+            'size': cluster['size'],
+            'sample_questions': cluster['sample_questions'],
+            'content': content,
+            'status': 'draft',
+            'created_at': int(time.time()),
+        }
+        self.r.set(key, json.dumps(article_data), ex=86400 * 30)
+        logger.info(f"Saved draft article: {key}, keywords={cluster['keywords']}")
+
 
 class SelfLearningEngine:
-    """Full pipeline: Observer → Extractor → Generator."""
+    """Full pipeline: Observer -> Extractor -> Generator."""
 
     def __init__(self, r: redis.Redis, llm_client=None):
         self.observer = Observer(r)
@@ -208,7 +218,7 @@ class SelfLearningEngine:
         self.observer.observe(agent, user_id, question)
 
     async def run_cycle(self) -> list[dict]:
-        """Run one extraction cycle: drain → cluster → generate proposals."""
+        """Run one extraction cycle: drain -> cluster -> generate proposals."""
         entries = self.observer.drain()
         if not entries:
             return []
