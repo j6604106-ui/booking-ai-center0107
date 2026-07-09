@@ -1,6 +1,11 @@
 # cc-connect configuration for Tourism Platform
 # Uses tmux agent type — spawns our Python CLI wrapper
 # Telegram via Long Polling (no public IP needed!)
+#
+# KEY: prompt_pattern must match TB> prompt marker that
+# tourism_bot_cli.py prints after each response
+
+language = "en"
 
 [log]
 level = "info"
@@ -18,6 +23,7 @@ content = "🤔 Подбираем ответ из базы знаний..."
 name = "tourism-bot"
 admin_from = "*"
 allow_from = "*"
+reset_on_idle_mins = 0
 
 [projects.agent]
 type = "tmux"
@@ -26,7 +32,9 @@ type = "tmux"
 session = "tourism-bot"
 auto_create = true
 init_command = "python3 /opt/tourism_platform/tourism_bot_cli.py"
-poll_interval_ms = 500
+startup_wait_ms = 3000
+prompt_pattern = 'TB>\s*$'
+poll_interval_ms = 200
 
 [[projects.platforms]]
 type = "telegram"
@@ -39,6 +47,7 @@ token = "8530023333:AAHHlAvuY4zu7FxSq38ydJc0vQN5UEA1uPo"
 # name = "tourism-discord"
 # admin_from = "*"
 # allow_from = "*"
+# reset_on_idle_mins = 0
 #
 # [projects.agent]
 # type = "tmux"
@@ -47,7 +56,9 @@ token = "8530023333:AAHHlAvuY4zu7FxSq38ydJc0vQN5UEA1uPo"
 # session = "tourism-discord"
 # auto_create = true
 # init_command = "python3 /opt/tourism_platform/tourism_bot_cli.py"
-# poll_interval_ms = 500
+# startup_wait_ms = 3000
+# prompt_pattern = 'TB>\s*$'
+# poll_interval_ms = 200
 #
 # [[projects.platforms]]
 # type = "discord"
@@ -60,6 +71,7 @@ token = "8530023333:AAHHlAvuY4zu7FxSq38ydJc0vQN5UEA1uPo"
 # name = "tourism-slack"
 # admin_from = "*"
 # allow_from = "*"
+# reset_on_idle_mins = 0
 #
 # [projects.agent]
 # type = "tmux"
@@ -68,7 +80,9 @@ token = "8530023333:AAHHlAvuY4zu7FxSq38ydJc0vQN5UEA1uPo"
 # session = "tourism-slack"
 # auto_create = true
 # init_command = "python3 /opt/tourism_platform/tourism_bot_cli.py"
-# poll_interval_ms = 500
+# startup_wait_ms = 3000
+# prompt_pattern = 'TB>\s*$'
+# poll_interval_ms = 200
 #
 # [[projects.platforms]]
 # type = "slack"

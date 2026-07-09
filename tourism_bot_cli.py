@@ -5,18 +5,17 @@ cc-connect spawns this in a tmux session. It reads user messages,
 calls our FastAPI /chat/{agent} API, and prints responses to stdout.
 cc-connect polls tmux output and sends it back to the messaging platform.
 
-The script runs in an interactive loop — waits for input, processes, outputs.
+After each response, prints a PROMPT_MARKER "TB>" so cc-connect's
+prompt_pattern can detect when the bot finished responding.
 """
 
 import os
 import sys
 import requests
-import select
-import termios
-import tty
 
 API_BASE = os.environ.get("TOURISM_API_BASE", "http://localhost:8000")
 API_KEY = os.environ.get("TOURISM_API_KEY", "")
+PROMPT_MARKER = "TB>"  # cc-connect prompt_pattern will match this
 
 AGENTS = {
     "consultant": "🎯 Консультант",
@@ -76,8 +75,8 @@ def handle(text: str) -> str:
 
 
 def main():
-    # Print ready marker so cc-connect knows agent is initialized
-    print("Tourism Bot ready. Ask me about travel!", flush=True)
+    # Print ready marker so cc-connect knows agent is initialized + prompt marker
+    print(f"Tourism Bot ready. Ask me about travel!\n{PROMPT_MARKER}", flush=True)
 
     # Interactive loop — read lines from stdin
     while True:
@@ -90,7 +89,8 @@ def main():
                 continue
 
             response = handle(line)
-            print(response, flush=True)
+            # Print response + prompt marker so cc-connect knows response is complete
+            print(f"{response}\n{PROMPT_MARKER}", flush=True)
         except EOFError:
             break
         except KeyboardInterrupt:
