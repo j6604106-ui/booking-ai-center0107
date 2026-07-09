@@ -1,6 +1,5 @@
 """Telegram bot handler: processes incoming updates via webhook."""
 
-import re
 import logging
 from dataclasses import dataclass
 
@@ -10,11 +9,15 @@ from utils.session_manager import SessionManager
 from utils.prompts import get_agent_prompt, assemble_user_message
 from utils.self_learning import SelfLearningEngine
 from utils.cost_tracker import CostTracker, estimate_tokens
+from utils.response_cleaner import clean_response
 
 logger = logging.getLogger(__name__)
 
-THINKING_TAG_RE = re.compile(r'<think>.*?</think>', re.DOTALL)
-SAFETY_FILTER_RE = re.compile(r'^User Safety:\s*\w+$', re.IGNORECASE)
+# Common Russian greetings — respond directly without KB/LLM
+GREETINGS = {
+    'привет', 'здравствуйте', 'хай', 'hello', 'hi', 'добрый день',
+    'доброе утро', 'добрый вечер', 'салют', 'ку', 'hey',
+}
 
 AGENTS = {
     'consultant': '🎯 Консультант — выбор направления',
@@ -45,6 +48,7 @@ def _get_user_agent(config: BotConfig, user_id: int) -> str:
 
 async def handle_message(config: BotConfig, user_id: int, text: str, agent: str = '') -> str:
     text_stripped = text.strip()
+    text_lower = text_stripped.lower()
 
     # /start command
     if text_stripped == '/start':
@@ -85,7 +89,18 @@ async def handle_message(config: BotConfig, user_id: int, text: str, agent: str 
     if text_stripped == '/clear':
         agent = _get_user_agent(config, user_id)
         config.sessions.clear(agent, user_id)
-        return '✅ История диалога очищена.'
+        return '✅ История диалога очищен.'
+
+    # Greetings — respond directly without LLM
+    if text_lower in GREETINGS or (len(text_stripped) < 5 and text_lower in GREETINGS):
+        return (
+            '👋 Привет! Я помогаю с подбором туров, бронированием, страховкой и визами.\n\n'
+            'Напишите ваш вопрос — например:\n'
+            '• «Хочу поехать в Турцию на неделю»\n'
+            '• «Какие безвизовые страны?»\n'
+            '• «Сколько стоит страховка?»\n\n'
+            'Или выберите агента: /agents'
+        )
 
     # Regular message
     agent = agent or _get_user_agent(config, user_id)
@@ -96,7 +111,7 @@ async def handle_message(config: BotConfig, user_id: int, text: str, agent: str 
     relevant = config.retriever.retrieve(text, top_k=3)
     knowledge_context = config.retriever.format_context(relevant)
 
-    # Compact session if history is long (AgentForge-inspired)
+    # Compact session if history is long
     await config.sessions.compact_if_needed(agent, user_id)
 
     # Build messages with summary context
@@ -110,32 +125,37 @@ async def handle_message(config: BotConfig, user_id: int, text: str, agent: str 
     input_text = ' '.join(m['content'] for m in messages)
     input_tokens = estimate_tokens(input_text)
 
-    try:
-        response = await config.llm.chat(messages, temperature=0.5)
-    except Exception as e:
-        logger.error(f'LLM error for user {user_id}: {e}')
-        return f'⚠️ Ошибка LLM: {e}'
-
-    # Strip reasoning tags from DeepSeek R1 responses
-    response = THINKING_TAG_RE.sub('', response).strip()
-
-    # Detect safety-filter stubs and retry with different approach
-    if SAFETY_FILTER_RE.match(response) or len(response) < 20:
-        logger.warning(f"Safety filter stub or too short response: '{response[:50]}', retrying with explicit prompt")
-        # Retry with a clearer prompt that avoids safety triggers
-        retry_messages = messages[:-1]  # remove last user message
-        retry_messages.append({
-            'role': 'user',
-            'content': f"Ответь по-русски, дружелюбно, в формате Наблюдение/Концепция/Резюме/Вопрос.\nВопрос: {text}",
-        })
+    # Try LLM call with fallback handling
+    response = ''
+    for attempt in range(2):
         try:
-            response = await config.llm.chat(retry_messages, temperature=0.5)
-            response = THINKING_TAG_RE.sub('', response).strip()
-        except Exception as e2:
-            logger.warning(f"Retry also failed: {e2}")
+            raw_response = await config.llm.chat(messages, temperature=0.5)
+            response = clean_response(raw_response)
+        except Exception as e:
+            logger.error(f'LLM error for user {user_id}: {e}')
+            return f'⚠️ Сервис временно недоступен. Попробуйте через минуту.'
 
-    if not response:
-        response = '⚠️ LLM вернул пустой ответ. Попробуйте ещё раз.'
+        # If response is too short or empty, retry with simpler prompt
+        if len(response) < 30:
+            logger.warning(f'Short/empty response attempt {attempt+1}: "{response[:50]}"')
+            if attempt < 1:
+                # Simplify prompt for retry
+                messages = messages[:-1]
+                messages.append({
+                    'role': 'user',
+                    'content': f'Ответь кратко по-русски на вопрос туриста: {text}',
+                })
+                continue
+            # Final fallback — give helpful default
+            return (
+                'Я не смог обработать ваш запрос. Попробуйте:\n'
+                '• Задать вопрос более подробно\n'
+                '• Переключить агента: /agents\n'
+                '• Начать заново: /start'
+            )
+
+        # Got a good response — break
+        break
 
     # Track cost
     output_tokens = estimate_tokens(response)
